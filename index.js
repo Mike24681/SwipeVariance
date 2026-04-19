@@ -23,6 +23,21 @@ const ZW_CHARS = [
 ];
 
 // ── Default settings ───────────────────────────────────────────────────
+// Invisible punctuation — wrapped in zero-width chars so users never see them,
+// but each one shifts the token boundary for the AI.
+const INVISIBLE_PUNCTUATION = [
+    "\u200B.\u200B",
+    "\u200B,\u200B",
+    "\u200C.\u200C",
+    "\u200C,\u200C",
+    "\u200D.\u200D",
+    "\u200D,\u200D",
+    "\u2060.\u2060",
+    "\u2060,\u2060",
+    "\uFEFF.\uFEFF",
+    "\uFEFF,\uFEFF",
+];
+
 const defaultSettings = {
     enabled: true,
     strength: 5,           // 1-10 overall strength dial
@@ -30,6 +45,7 @@ const defaultSettings = {
     multiDepth: true,       // inject at multiple depths
     roleShuffle: true,      // vary the injection role
     entropyPrefix: true,    // add a tiny unique generation nonce
+    punctuationPad: true,   // add invisible periods/commas to message edges
 };
 
 let generationCounter = 0;
@@ -182,6 +198,31 @@ export function swipeVarianceInterceptor(chat, contextSize, abort, type) {
         const snippet = randomZWSequence(snippetLen);
         msg.content = spliceIntoText(msg.content, snippet);
     }
+
+    // Strategy 4: Invisible punctuation padding on message edges
+    if (settings.punctuationPad) {
+        for (let i = 0; i < chat.length; i++) {
+            const msg = chat[i];
+            if (!msg.content || typeof msg.content !== "string") continue;
+            if (msg.role !== "user" && msg.role !== "assistant") continue;
+
+            // Random count 1-6 for beginning, 1-6 for end (always different per message)
+            const prefixCount = Math.floor(Math.random() * 6) + 1;
+            const suffixCount = Math.floor(Math.random() * 6) + 1;
+
+            let prefix = "";
+            for (let p = 0; p < prefixCount; p++) {
+                prefix += INVISIBLE_PUNCTUATION[Math.floor(Math.random() * INVISIBLE_PUNCTUATION.length)];
+            }
+
+            let suffix = "";
+            for (let s = 0; s < suffixCount; s++) {
+                suffix += INVISIBLE_PUNCTUATION[Math.floor(Math.random() * INVISIBLE_PUNCTUATION.length)];
+            }
+
+            msg.content = prefix + msg.content + suffix;
+        }
+    }
 }
 
 // ── Event hook ─────────────────────────────────────────────────────────
@@ -199,6 +240,7 @@ function loadSettingsUI() {
     $("#swipe_variance_multidepth").prop("checked", settings.multiDepth);
     $("#swipe_variance_roleshuffle").prop("checked", settings.roleShuffle);
     $("#swipe_variance_entropy").prop("checked", settings.entropyPrefix);
+    $("#swipe_variance_punctuation").prop("checked", settings.punctuationPad);
 }
 
 jQuery(async () => {
@@ -264,6 +306,16 @@ jQuery(async () => {
                         Prepend a unique invisible generation ID so no two requests are identical.
                     </small>
                 </div>
+                <div class="swipe_variance_block">
+                    <label class="checkbox_label" for="swipe_variance_punctuation">
+                        <input id="swipe_variance_punctuation" type="checkbox" />
+                        <span>Invisible Punctuation Padding</span>
+                    </label>
+                    <small class="swipe_variance_hint">
+                        Adds a random number of invisible periods/commas to the start and end
+                        of every user and AI message. Changes token boundaries each swipe.
+                    </small>
+                </div>
                 <hr class="sysHR" />
             </div>
         </div>
@@ -309,6 +361,12 @@ jQuery(async () => {
     $("#swipe_variance_entropy").on("change", function () {
         const settings = getSettings();
         settings.entropyPrefix = !!$(this).prop("checked");
+        saveSettingsDebounced();
+    });
+
+    $("#swipe_variance_punctuation").on("change", function () {
+        const settings = getSettings();
+        settings.punctuationPad = !!$(this).prop("checked");
         saveSettingsDebounced();
     });
 
