@@ -1,51 +1,50 @@
 const MODULE_NAME = "swipe_variance";
 
-// ── Invisible Unicode palette ──────────────────────────────────────────
-// These characters are invisible or zero-width in rendered text but each
-// tokenizes differently, shifting the probability distribution for every swipe.
-const ZW_CHARS = [
-    "\u200B", // Zero Width Space
-    "\u200C", // Zero Width Non-Joiner
-    "\u200D", // Zero Width Joiner
-    "\u2060", // Word Joiner
-    "\uFEFF", // Zero Width No-Break Space
-    "\u180E", // Mongolian Vowel Separator
-    "\u2061", // Function Application
-    "\u2062", // Invisible Times
-    "\u2063", // Invisible Separator
-    "\u2064", // Invisible Plus
-    "\u034F", // Combining Grapheme Joiner
-    "\u00AD", // Soft Hyphen
-    "\u2028", // Line Separator (invisible in most contexts)
-    "\u2029", // Paragraph Separator (invisible in most contexts)
-    "\u17B4", // Khmer Vowel Inherent Aq (invisible)
-    "\u17B5", // Khmer Vowel Inherent Aa (invisible)
+// ── Unicode whitespace palette ─────────────────────────────────────────
+// These are visible-width whitespace characters that Claude tokenizes
+// distinctly from regular ASCII spaces.  They render as spaces of varying
+// widths but each one shifts the token boundary for every swipe.
+const SPACE_CHARS = [
+    "\u2002", // En Space
+    "\u2003", // Em Space
+    "\u2004", // Three-Per-Em Space
+    "\u2005", // Four-Per-Em Space
+    "\u2006", // Six-Per-Em Space
+    "\u2007", // Figure Space
+    "\u2008", // Punctuation Space
+    "\u2009", // Thin Space
+    "\u200A", // Hair Space
+    "\u202F", // Narrow No-Break Space
+    "\u205F", // Medium Mathematical Space
+    "\u00A0", // No-Break Space
+    "\u3000", // Ideographic Space
+    "\t",     // Tab
 ];
 
-// ── Default settings ───────────────────────────────────────────────────
-// Invisible punctuation — wrapped in zero-width chars so users never see them,
-// but each one shifts the token boundary for the AI.
-const INVISIBLE_PUNCTUATION = [
-    "\u200B.\u200B",
-    "\u200B,\u200B",
-    "\u200C.\u200C",
-    "\u200C,\u200C",
-    "\u200D.\u200D",
-    "\u200D,\u200D",
-    "\u2060.\u2060",
-    "\u2060,\u2060",
-    "\uFEFF.\uFEFF",
-    "\uFEFF,\uFEFF",
+// ── Edge-padding sequences ─────────────────────────────────────────────
+// Used to pad message boundaries — Claude tokenizes all of these.
+const PAD_SEQUENCES = [
+    "\n",
+    "\n ",
+    " \n",
+    "\n\n",
+    "  ",
+    "   ",
+    "\t",
+    " \t",
+    "\t ",
+    "\n\t",
 ];
 
 const defaultSettings = {
     enabled: true,
     strength: 5,           // 1-10 overall strength dial
-    perturbMessages: true,  // splice invisible chars into existing messages
-    multiDepth: true,       // inject at multiple depths
+    perturbMessages: true,  // swap regular spaces with Unicode space variants
+    multiDepth: true,       // inject whitespace at multiple depths
     roleShuffle: true,      // vary the injection role
-    entropyPrefix: true,    // add a tiny unique generation nonce
-    punctuationPad: true,   // add invisible periods/commas to message edges
+    entropyPrefix: true,    // inject a unique tokenizable seed
+    punctuationPad: true,   // newline/whitespace padding on message edges
+    trailingSpace: true,    // random trailing whitespace on all messages
 };
 
 let generationCounter = 0;
@@ -71,12 +70,12 @@ function sample(arr, count) {
     return shuffled.slice(0, Math.min(count, arr.length));
 }
 
-/** Build a random invisible sequence of length `n` (never the same twice in a row). */
-function randomZWSequence(n) {
+/** Build a random whitespace sequence of length `n` (never the same twice in a row). */
+function randomSpaceSequence(n) {
     let seq = "";
     let prev = "";
     for (let i = 0; i < n; i++) {
-        const pool = ZW_CHARS.filter((c) => c !== prev);
+        const pool = SPACE_CHARS.filter((c) => c !== prev);
         const picked = pool[Math.floor(Math.random() * pool.length)];
         seq += picked;
         prev = picked;
@@ -93,22 +92,16 @@ function generateNonce() {
     return `${time}${rand}${count}`;
 }
 
-/** Insert `snippet` at a random position inside `text` (at a word boundary). */
-function spliceIntoText(text, snippet) {
-    if (!text || text.length < 2) return snippet + text;
-    // Find all word-boundary positions (between spaces / after punctuation)
-    const positions = [];
-    for (let i = 1; i < text.length - 1; i++) {
-        if (text[i] === " " || text[i] === "\n") {
-            positions.push(i);
-        }
+/** Replace a random space in `text` with a Unicode whitespace variant. */
+function perturbSpace(text) {
+    const spacePositions = [];
+    for (let i = 0; i < text.length; i++) {
+        if (text[i] === " ") spacePositions.push(i);
     }
-    if (positions.length === 0) {
-        // Fallback: insert after first char
-        return text[0] + snippet + text.slice(1);
-    }
-    const pos = positions[Math.floor(Math.random() * positions.length)];
-    return text.slice(0, pos) + snippet + text.slice(pos);
+    if (spacePositions.length === 0) return text;
+    const pos = spacePositions[Math.floor(Math.random() * spacePositions.length)];
+    const replacement = SPACE_CHARS[Math.floor(Math.random() * SPACE_CHARS.length)];
+    return text.slice(0, pos) + replacement + text.slice(pos + 1);
 }
 
 // ── Strategy 1: Multi-depth prompt injection ───────────────────────────
@@ -126,7 +119,7 @@ function injectPrompts() {
     if (!settings.enabled) return;
 
     const strength = settings.strength ?? 5;
-    // Number of invisible chars per injection scales with strength
+    // Number of whitespace chars per injection scales with strength
     const charCount = Math.max(2, Math.floor(strength * 0.8) + 2);
     // Number of injection points: 1-4 depending on strength and multiDepth
     const injectionCount = settings.multiDepth
@@ -145,7 +138,7 @@ function injectPrompts() {
 
     depths.forEach((depth, idx) => {
         const key = `SwipeVariance_${idx}`;
-        const seq = randomZWSequence(charCount);
+        const seq = randomSpaceSequence(charCount);
 
         let role = 0; // default system
         if (settings.roleShuffle) {
@@ -156,13 +149,12 @@ function injectPrompts() {
         lastInjections[key] = true;
     });
 
-    // Strategy 2: Entropy nonce — a tiny system-role injection with a unique ID
+    // Strategy 2: Entropy seed — a unique tokenizable string Claude will process
     if (settings.entropyPrefix) {
         const nonceKey = "SwipeVariance_nonce";
         const nonce = generateNonce();
-        // Wrap in zero-width chars so it's invisible to user but changes tokens
-        const wrapped = randomZWSequence(2) + nonce + randomZWSequence(2);
-        setExtensionPrompt(nonceKey, wrapped, 0, 0, false, 0); // position=BEFORE_PROMPT
+        // Plain text nonce — Claude tokenizes this distinctly each generation
+        setExtensionPrompt(nonceKey, nonce, 0, 0, false, 0); // position=BEFORE_PROMPT
         lastInjections[nonceKey] = true;
     }
 }
@@ -172,55 +164,71 @@ function injectPrompts() {
 // It receives the actual chat array and can modify messages in-place.
 export function swipeVarianceInterceptor(chat, contextSize, abort, type) {
     const settings = getSettings();
-    if (!settings.enabled || !settings.perturbMessages) return;
+    if (!settings.enabled) return;
     if (!Array.isArray(chat) || chat.length === 0) return;
 
     const strength = settings.strength ?? 5;
-    // How many messages to perturb: 1-5 based on strength
-    const perturbCount = Math.min(chat.length, Math.max(1, Math.ceil(strength / 2)));
-    // How many invisible chars to splice into each perturbed message
-    const snippetLen = Math.max(1, Math.floor(strength / 2));
 
-    // Pick random indices from the chat to perturb (avoid the very first system prompt)
-    const indices = [];
-    for (let i = 0; i < chat.length; i++) {
-        if (chat[i]?.content && typeof chat[i].content === "string") {
-            indices.push(i);
+    // Strategy 3a: Space perturbation — swap regular spaces with Unicode variants
+    if (settings.perturbMessages) {
+        const perturbCount = Math.min(chat.length, Math.max(1, Math.ceil(strength / 2)));
+        const swapsPerMessage = Math.max(1, Math.floor(strength / 2));
+
+        const indices = [];
+        for (let i = 0; i < chat.length; i++) {
+            if (chat[i]?.content && typeof chat[i].content === "string") {
+                indices.push(i);
+            }
+        }
+
+        const chosen = sample(indices, perturbCount);
+
+        for (const idx of chosen) {
+            const msg = chat[idx];
+            if (!msg.content || typeof msg.content !== "string") continue;
+
+            for (let s = 0; s < swapsPerMessage; s++) {
+                msg.content = perturbSpace(msg.content);
+            }
         }
     }
 
-    const chosen = sample(indices, perturbCount);
-
-    for (const idx of chosen) {
-        const msg = chat[idx];
-        if (!msg.content || typeof msg.content !== "string") continue;
-
-        const snippet = randomZWSequence(snippetLen);
-        msg.content = spliceIntoText(msg.content, snippet);
-    }
-
-    // Strategy 4: Invisible punctuation padding on message edges
+    // Strategy 3b: Edge padding — random newlines/whitespace at message boundaries
     if (settings.punctuationPad) {
         for (let i = 0; i < chat.length; i++) {
             const msg = chat[i];
             if (!msg.content || typeof msg.content !== "string") continue;
             if (msg.role !== "user" && msg.role !== "assistant") continue;
 
-            // Random count 1-6 for beginning, 1-6 for end (always different per message)
-            const prefixCount = Math.floor(Math.random() * 6) + 1;
-            const suffixCount = Math.floor(Math.random() * 6) + 1;
+            const prefixCount = Math.floor(Math.random() * 4) + 1;
+            const suffixCount = Math.floor(Math.random() * 4) + 1;
 
             let prefix = "";
             for (let p = 0; p < prefixCount; p++) {
-                prefix += INVISIBLE_PUNCTUATION[Math.floor(Math.random() * INVISIBLE_PUNCTUATION.length)];
+                prefix += PAD_SEQUENCES[Math.floor(Math.random() * PAD_SEQUENCES.length)];
             }
 
             let suffix = "";
             for (let s = 0; s < suffixCount; s++) {
-                suffix += INVISIBLE_PUNCTUATION[Math.floor(Math.random() * INVISIBLE_PUNCTUATION.length)];
+                suffix += PAD_SEQUENCES[Math.floor(Math.random() * PAD_SEQUENCES.length)];
             }
 
             msg.content = prefix + msg.content + suffix;
+        }
+    }
+
+    // Strategy 3c: Trailing whitespace — random Unicode whitespace appended
+    if (settings.trailingSpace) {
+        for (let i = 0; i < chat.length; i++) {
+            const msg = chat[i];
+            if (!msg.content || typeof msg.content !== "string") continue;
+
+            const trailCount = Math.floor(Math.random() * (strength + 2)) + 1;
+            let trail = "";
+            for (let t = 0; t < trailCount; t++) {
+                trail += SPACE_CHARS[Math.floor(Math.random() * SPACE_CHARS.length)];
+            }
+            msg.content = msg.content + trail;
         }
     }
 }
@@ -241,6 +249,7 @@ function loadSettingsUI() {
     $("#swipe_variance_roleshuffle").prop("checked", settings.roleShuffle);
     $("#swipe_variance_entropy").prop("checked", settings.entropyPrefix);
     $("#swipe_variance_punctuation").prop("checked", settings.punctuationPad);
+    $("#swipe_variance_trailingspace").prop("checked", settings.trailingSpace);
 }
 
 jQuery(async () => {
@@ -265,18 +274,18 @@ jQuery(async () => {
                     <input id="swipe_variance_strength" type="range"
                            min="1" max="10" step="1" value="5" />
                     <small class="swipe_variance_hint">
-                        Controls how many injections, perturbations, and invisible chars are used.
+                        Controls how many injections, perturbations, and whitespace changes are used.
                     </small>
                 </div>
                 <hr class="sysHR" />
                 <div class="swipe_variance_block">
                     <label class="checkbox_label" for="swipe_variance_perturb">
                         <input id="swipe_variance_perturb" type="checkbox" />
-                        <span>Perturb Messages</span>
+                        <span>Space Perturbation</span>
                     </label>
                     <small class="swipe_variance_hint">
-                        Splice invisible characters into random existing messages before generation.
-                        This changes how the AI "sees" the conversation each time.
+                        Replace random spaces in messages with Unicode whitespace variants
+                        (em space, thin space, etc.) that Claude tokenizes differently.
                     </small>
                 </div>
                 <div class="swipe_variance_block">
@@ -285,7 +294,7 @@ jQuery(async () => {
                         <span>Multi-Depth Injection</span>
                     </label>
                     <small class="swipe_variance_hint">
-                        Inject invisible characters at multiple random depths in the prompt.
+                        Inject Unicode whitespace sequences at multiple random depths in the prompt.
                     </small>
                 </div>
                 <div class="swipe_variance_block">
@@ -300,20 +309,31 @@ jQuery(async () => {
                 <div class="swipe_variance_block">
                     <label class="checkbox_label" for="swipe_variance_entropy">
                         <input id="swipe_variance_entropy" type="checkbox" />
-                        <span>Entropy Nonce</span>
+                        <span>Entropy Seed</span>
                     </label>
                     <small class="swipe_variance_hint">
-                        Prepend a unique invisible generation ID so no two requests are identical.
+                        Inject a unique tokenizable seed each generation so no two requests
+                        are identical to Claude's tokenizer.
                     </small>
                 </div>
                 <div class="swipe_variance_block">
                     <label class="checkbox_label" for="swipe_variance_punctuation">
                         <input id="swipe_variance_punctuation" type="checkbox" />
-                        <span>Invisible Punctuation Padding</span>
+                        <span>Edge Padding</span>
                     </label>
                     <small class="swipe_variance_hint">
-                        Adds a random number of invisible periods/commas to the start and end
-                        of every user and AI message. Changes token boundaries each swipe.
+                        Add random newlines and whitespace to the start/end of user and AI
+                        messages. Shifts token boundaries at message edges.
+                    </small>
+                </div>
+                <div class="swipe_variance_block">
+                    <label class="checkbox_label" for="swipe_variance_trailingspace">
+                        <input id="swipe_variance_trailingspace" type="checkbox" />
+                        <span>Trailing Whitespace</span>
+                    </label>
+                    <small class="swipe_variance_hint">
+                        Append random Unicode whitespace characters to all messages.
+                        Each swipe gets a different trailing pattern.
                     </small>
                 </div>
                 <hr class="sysHR" />
@@ -367,6 +387,12 @@ jQuery(async () => {
     $("#swipe_variance_punctuation").on("change", function () {
         const settings = getSettings();
         settings.punctuationPad = !!$(this).prop("checked");
+        saveSettingsDebounced();
+    });
+
+    $("#swipe_variance_trailingspace").on("change", function () {
+        const settings = getSettings();
+        settings.trailingSpace = !!$(this).prop("checked");
         saveSettingsDebounced();
     });
 
