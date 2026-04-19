@@ -1,0 +1,10 @@
+#swipe_variance_settings .swipe_variance_block {
+    margin: 5px 0;
+}
+
+#swipe_variance_settings .swipe_variance_hint {
+    display: block;
+    margin-top: 3px;
+    font-style: italic;
+    opacity: 0.6;
+}
